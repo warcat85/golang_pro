@@ -16,7 +16,6 @@ linters-settings:
           - "!$test"
         allow:
           - $gostd
-          - golang.org/x/example/hello/reverse
       Test:
         files:
           - $test
