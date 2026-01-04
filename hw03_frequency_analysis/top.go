@@ -2,28 +2,50 @@ package hw03frequencyanalysis
 
 import (
 	"container/heap"
-	"fmt"
 	"regexp"
 	"sort"
 	"strings"
 )
 
-/*
-Can be:
-- any number of spaces (possibly having a punctuation character before or after)
-- a punctuation character (having any numbers of spaces before or after)
-- a string starting with punctuation character
-- a string ending with punctuation character
-- punctuation character is any punctuation character and ...
-*/
-var PUNCT = `(\.\.\.|\p{P})`
+const (
+	ALL = -1
+)
 
-var DELIMITERS = regexp.MustCompile(
-	fmt.Sprintf("(%[1]s?\\s+%[1]s?)|(\\s+%[1]s\\s+)|^%[1]s|%[1]s$", PUNCT))
+var (
+	/*
+	   Regex to find delimiters
+	   Can be:
+	   - any number of spaces (possibly having a punctuation character before or after),
+	   followed by a punctuation character that follows any number of spaces any number of times
+	   (to eliminate single delimiters)
+	   - a string starting with punctuation characters
+	   - a string ending with punctuation characters
 
-//	`(\p{P}?\s+\p{P}?)|(\s+[\p{P}]\s+)|^\p{P}|\p{P}$`)
+	   Currently this regex is unused, because without lookahead and lookbehind it is impossible
+	   to detect a difference if punctuation characters starts straight after the word or the space -
+	   therefore it is impossible to detect multiple punctuation characters as a word
+	*/
+	DELIMITERS = regexp.MustCompile(
+		`(\p{P}*(\s+(\p{P}\s+)*|$)|^)\p{P}*`)
+	/*
+	   Regex to find words
+	   Can be:
+	   - anything starting by not a punctuation character and not a space, which may follow
+	   by any number of not spaces and end by not a punctuation character and not a space
+	   - more than one punctuation character
+	*/
+	DELIMITED = regexp.MustCompile(
+		`[^\p{P}\s](?:[^\s]*[^\p{P}\s])*|[\p{P}]{2,}`)
 
-const ALL = -1
+	/*
+	   Regex to find word within the string split by words
+	   Can be:
+	   - anything starting by not a punctuation character, which may follow
+	   by any number of characters and end by not a punctuation character
+	   - string containing only punctuation characters
+	*/
+	WORD = regexp.MustCompile(`[^\p{P}](?:.*[^\p{P}])?|^\p{P}{2,}$`)
+)
 
 /*
 Simple solution:
@@ -34,8 +56,13 @@ func Top10Simple(text string) []string {
 	return top10AlgoSimple(wordCount)
 }
 
-func Top10SimpleAsterisk(text string) []string {
+func Top10SimpleRegex(text string) []string {
 	wordCount := readCountRegex(text)
+	return top10AlgoSimple(wordCount)
+}
+
+func Top10SimpleFieldsRegex(text string) []string {
+	wordCount := readCountFieldsRegex(text)
 	return top10AlgoSimple(wordCount)
 }
 
@@ -65,18 +92,34 @@ func Top10ArrayHeap(text string) []string {
 	return createResult(words)
 }
 
-func Top10ArrayHeapAsterisk(text string) []string {
+func Top10ArrayHeapRegex(text string) []string {
 	wordCount := make(map[string]*Word)
 	words := make([]*Word, 0, 10)
-	for _, word := range DELIMITERS.Split(text, ALL) {
-		if word != "" {
-			index := strings.ToLower(word)
-			cur, ok := wordCount[index]
+	for _, match := range DELIMITED.FindAllString(text, ALL) {
+		word := strings.ToLower(match)
+		cur, ok := wordCount[word]
+		if !ok {
+			cur = &Word{word, 0, -1}
+			wordCount[word] = cur
+		}
+		cur.count++
+		words = add(words, cur)
+	}
+	return createResult(words)
+}
+
+func Top10ArrayHeapFieldsRegex(text string) []string {
+	wordCount := make(map[string]*Word)
+	words := make([]*Word, 0, 10)
+	for _, src := range strings.Fields(text) {
+		if word, isWord := transformWord(src); isWord {
+			cur, ok := wordCount[word]
 			if !ok {
-				cur = &Word{index, 0, -1}
-				wordCount[index] = cur
+				cur = &Word{word, 1, -1}
+				wordCount[word] = cur
+			} else {
+				cur.count++
 			}
-			cur.count++
 			words = add(words, cur)
 		}
 	}
@@ -93,8 +136,13 @@ func Top10PostArrayHeap(text string) []string {
 	return top10AlgoArrayHeap(wordCount)
 }
 
-func Top10PostArrayHeapAsterisk(text string) []string {
+func Top10PostArrayHeapRegex(text string) []string {
 	wordCount := readWordsRegex(text)
+	return top10AlgoArrayHeap(wordCount)
+}
+
+func Top10PostArrayHeapFieldsRegex(text string) []string {
+	wordCount := readWordsFieldsRegex(text)
 	return top10AlgoArrayHeap(wordCount)
 }
 
@@ -108,8 +156,13 @@ func Top10PostMinHeap(text string) []string {
 	return top10AlgoMinHeap(wordCount)
 }
 
-func Top10PostMinHeapAsterisk(text string) []string {
+func Top10PostMinHeapRegex(text string) []string {
 	wordCount := readCountRegex(text)
+	return top10AlgoMinHeap(wordCount)
+}
+
+func Top10PostMinHeapFieldsRegex(text string) []string {
+	wordCount := readCountFieldsRegex(text)
 	return top10AlgoMinHeap(wordCount)
 }
 
@@ -122,12 +175,21 @@ func readCountFields(text string) *map[string]uint {
 	return &wordCount
 }
 
-// reads words using DELIMITERS regex and counts them into a map.
+// reads words using DELIMITED regex and counts them into a map.
 func readCountRegex(text string) *map[string]uint {
 	wordCount := make(map[string]uint)
-	for _, word := range DELIMITERS.Split(text, ALL) {
-		if word != "" {
-			wordCount[strings.ToLower(word)]++
+	for _, word := range DELIMITED.FindAllString(text, ALL) {
+		wordCount[strings.ToLower(word)]++
+	}
+	return &wordCount
+}
+
+// reads words using strings.Fields, then applies regex to every word.
+func readCountFieldsRegex(text string) *map[string]uint {
+	wordCount := make(map[string]uint)
+	for _, src := range strings.Fields(text) {
+		if word, isWord := transformWord(src); isWord {
+			wordCount[word]++
 		}
 	}
 	return &wordCount
@@ -151,19 +213,39 @@ func readWordsFields(text string) *map[string]*Word {
 // reads words using DELIMITERS regex and counts them into a map.
 func readWordsRegex(text string) *map[string]*Word {
 	wordCount := make(map[string]*Word)
-	for _, word := range DELIMITERS.Split(text, ALL) {
-		if word != "" {
-			index := strings.ToLower(word)
-			cur, ok := wordCount[index]
+	for _, match := range DELIMITED.FindAllString(text, ALL) {
+		word := strings.ToLower(match)
+		cur, ok := wordCount[word]
+		if !ok {
+			cur = &Word{word, 1, -1}
+			wordCount[word] = cur
+		} else {
+			cur.count++
+		}
+	}
+	return &wordCount
+}
+
+// reads words using strings.Fields and counts them into a map of words.
+func readWordsFieldsRegex(text string) *map[string]*Word {
+	wordCount := make(map[string]*Word)
+	for _, src := range strings.Fields(text) {
+		if word, isWord := transformWord(src); isWord {
+			cur, ok := wordCount[word]
 			if !ok {
-				cur = &Word{index, 1, -1}
-				wordCount[index] = cur
+				cur = &Word{word, 1, -1}
+				wordCount[word] = cur
 			} else {
 				cur.count++
 			}
 		}
 	}
 	return &wordCount
+}
+
+func transformWord(word string) (string, bool) {
+	result := WORD.FindString(word)
+	return strings.ToLower(result), len(result) > 0
 }
 
 func top10AlgoSimple(wordCount *map[string]uint) []string {
