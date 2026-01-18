@@ -49,8 +49,174 @@ func TestCache(t *testing.T) {
 		require.Nil(t, val)
 	})
 
+	t.Run("clear logic", func(t *testing.T) {
+		c := NewCache(3)
+
+		wasInCache := c.Set("aaa", 100)
+		require.False(t, wasInCache)
+
+		wasInCache = c.Set("bbb", 200)
+		require.False(t, wasInCache)
+
+		wasInCache = c.Set("ccc", 300)
+		require.False(t, wasInCache)
+
+		val, ok := c.Get("aaa")
+		require.True(t, ok)
+		require.Equal(t, 100, val)
+
+		val, ok = c.Get("bbb")
+		require.True(t, ok)
+		require.Equal(t, 200, val)
+
+		val, ok = c.Get("ccc")
+		require.True(t, ok)
+		require.Equal(t, 300, val)
+
+		c.Clear()
+		val, ok = c.Get("ccc")
+		require.False(t, ok)
+		require.Nil(t, val)
+
+		val, ok = c.Get("bbb")
+		require.False(t, ok)
+		require.Nil(t, val)
+
+		val, ok = c.Get("aaa")
+		require.False(t, ok)
+		require.Nil(t, val)
+
+		wasInCache = c.Set("aaa", 100)
+		require.False(t, wasInCache)
+
+		wasInCache = c.Set("bbb", 200)
+		require.False(t, wasInCache)
+
+		wasInCache = c.Set("ccc", 300)
+		require.False(t, wasInCache)
+	})
+
+	t.Run("item pushed out", func(t *testing.T) {
+		c := NewCache(3)
+		c.Set("aaa", 100)
+		c.Set("bbb", 200)
+		c.Set("ccc", 300)
+		c.Set("ddd", 400)
+
+		val, ok := c.Get("ddd")
+		require.True(t, ok)
+		require.Equal(t, 400, val)
+
+		val, ok = c.Get("ccc")
+		require.True(t, ok)
+		require.Equal(t, 300, val)
+
+		val, ok = c.Get("bbb")
+		require.True(t, ok)
+		require.Equal(t, 200, val)
+
+		val, ok = c.Get("aaa")
+		require.False(t, ok)
+		require.Nil(t, val)
+	})
+
 	t.Run("purge logic", func(t *testing.T) {
-		// Write me
+		c := NewCache(3)
+		c.Set("aaa", 100)
+		c.Set("bbb", 200)
+		c.Set("ccc", 300)
+
+		val, ok := c.Get("ccc")
+		require.True(t, ok)
+		require.Equal(t, 300, val)
+
+		val, ok = c.Get("aaa")
+		require.True(t, ok)
+		require.Equal(t, 100, val)
+
+		val, ok = c.Get("bbb")
+		require.True(t, ok)
+		require.Equal(t, 200, val)
+
+		// ccc pushed out
+		c.Set("ddd", 400)
+
+		val, ok = c.Get("ddd")
+		require.True(t, ok)
+		require.Equal(t, 400, val)
+
+		val, ok = c.Get("bbb")
+		require.True(t, ok)
+		require.Equal(t, 200, val)
+
+		// ccc pushed out
+		val, ok = c.Get("ccc")
+		require.False(t, ok)
+		require.Nil(t, val)
+
+		val, ok = c.Get("aaa")
+		require.True(t, ok)
+		require.Equal(t, 100, val)
+
+		wasInCache := c.Set("ddd", 401)
+		require.True(t, wasInCache)
+
+		wasInCache = c.Set("bbb", 201)
+		require.True(t, wasInCache)
+
+		// aaa pushed out
+		wasInCache = c.Set("ccc", 301)
+		require.False(t, wasInCache)
+
+		// aaa pushed out
+		val, ok = c.Get("aaa")
+		require.False(t, ok)
+		require.Nil(t, val)
+
+		val, ok = c.Get("bbb")
+		require.True(t, ok)
+		require.Equal(t, 201, val)
+
+		// ddd pushed out
+		wasInCache = c.Set("aaa", 101)
+		require.False(t, wasInCache)
+
+		// ddd pushed out
+		val, ok = c.Get("ddd")
+		require.False(t, ok)
+		require.Nil(t, val)
+
+		wasInCache = c.Set("ccc", 302)
+		require.True(t, wasInCache)
+
+		// bbb pushed out
+		wasInCache = c.Set("ddd", 402)
+		require.False(t, wasInCache)
+
+		val, ok = c.Get("ccc")
+		require.True(t, ok)
+		require.Equal(t, 302, val)
+
+		// pushes out aaa
+		wasInCache = c.Set("bbb", 202)
+		// bbb was pushed out
+		require.False(t, wasInCache)
+
+		val, ok = c.Get("aaa")
+		require.False(t, ok)
+		require.Nil(t, val)
+
+		val, ok = c.Get("bbb")
+		require.True(t, ok)
+		require.Equal(t, 202, val)
+
+		val, ok = c.Get("ccc")
+		require.True(t, ok)
+		require.Equal(t, 302, val)
+
+		val, ok = c.Get("ddd")
+		require.True(t, ok)
+		require.Equal(t, 402, val)
 	})
 }
 
