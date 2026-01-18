@@ -49,7 +49,7 @@ func TestCache(t *testing.T) {
 		require.Nil(t, val)
 	})
 
-	t.Run("clear logic", func(t *testing.T) {
+	t.Run("clearing cache", func(t *testing.T) {
 		c := NewCache(3)
 
 		wasInCache := c.Set("aaa", 100)
@@ -95,8 +95,10 @@ func TestCache(t *testing.T) {
 		wasInCache = c.Set("ccc", 300)
 		require.False(t, wasInCache)
 	})
+}
 
-	t.Run("item pushed out", func(t *testing.T) {
+func TestCachePurgeLogic(t *testing.T) {
+	t.Run("purged on set", func(t *testing.T) {
 		c := NewCache(3)
 		c.Set("aaa", 100)
 		c.Set("bbb", 200)
@@ -120,7 +122,7 @@ func TestCache(t *testing.T) {
 		require.Nil(t, val)
 	})
 
-	t.Run("purge logic", func(t *testing.T) {
+	t.Run("complex purge logic", func(t *testing.T) {
 		c := NewCache(3)
 		c.Set("aaa", 100)
 		c.Set("bbb", 200)
