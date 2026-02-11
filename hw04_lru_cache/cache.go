@@ -44,12 +44,6 @@ type lruCache struct {
 	queue    List
 }
 
-// ItemCaches below can only cache single item.
-type lruItemCache struct {
-	*lruCache
-	helper lruItemHelper
-}
-
 type elem struct {
 	key   Key
 	value interface{}
@@ -73,26 +67,6 @@ func NewCache(kind Kind, capacity int) Cache {
 		return &lruCacheTripleLock{lruSafeCache: &lruSafeCache{lruCache: lruCache}}
 	default:
 		panic(fmt.Sprintf("invalid Kind %s specified!", kind.String()))
-	}
-}
-
-// cache that can only store single item (for testing performance)
-func NewItemCache(kind Kind) Cache {
-	lruCache := &lruCache{
-		capacity: 1,
-		queue:    NewList(),
-		items:    make(map[Key]*ListItem, 1),
-	}
-
-	switch kind {
-	case NoLock:
-		return &lruItemCache{lruCache: lruCache}
-	case SingleLock:
-		return &lruItemCacheSingleLock{lruSafeCache: &lruSafeCache{lruCache: lruCache}}
-	case DoubleLock:
-		return &lruItemCacheDoubleLock{lruSafeCache: &lruSafeCache{lruCache: lruCache}}
-	default:
-		panic("Invalid kind specified")
 	}
 }
 
@@ -157,23 +131,6 @@ func (c *lruCache) addItem(key Key, value interface{}) {
 	c.items[key] = elem
 }
 
-func (c *lruItemCache) Set(key Key, value interface{}) bool {
-	item := c.items[key]
-	if item != nil {
-		c.setItem(item, value)
-		return true
-	}
-
-	c.helper.clearAndAddItem(c.lruCache, key, value)
-	return false
-}
-
-func (h *lruItemHelper) clearAndAddItem(c *lruCache, key Key, value interface{}) {
-	c.queue = NewList()
-	elem := c.queue.PushFront(&elem{key, value})
-	c.items = map[Key]*ListItem{key: elem}
-}
-
 /* Below is the completed task with asterisk.*/
 type lruSafeCache struct {
 	*lruCache
@@ -189,27 +146,24 @@ type lruCacheDoubleLock struct {
 	*lruSafeCache
 }
 
-// CacheTripleLock is not working correctly if the following is true:
-// - number of possible values is less or equal the number of setter goroutines,
-// - and capacity is less than number of possible values
-// So if (capacity < values <= setter goroutines) it can happen that at some point the cache will
-// contain all the values (which will be more than capacity)
-// it should be also noted that this cache may temporarily hold a bit more values than the capacity
+/*
+	CacheTripleLock is not working correctly if the following is true:
+
+- number of possible keys in cache < setter goroutines + capacity
+This is happening because:
+  - Suppose we have capacity keys in cache
+    New request to set comes for the value that is not in the cache
+  - We remove the last used item and wait on mutex to insert it
+  - At the same time another <num setter goroutines - 1> setters are also coming
+
+to insert values that are not in the cache (including the one we just removed)
+- As soon as the lock unlocks they all subsequentially insert values so the
+cache now saturates - contains all possible keys that are always found
+In this case removal will not happen.
+*/
 type lruCacheTripleLock struct {
 	*lruSafeCache
 }
-
-type lruItemCacheSingleLock struct {
-	*lruSafeCache
-	helper lruItemHelper
-}
-
-type lruItemCacheDoubleLock struct {
-	*lruSafeCache
-	helper lruItemHelper
-}
-
-type lruItemHelper struct{}
 
 func (c *lruSafeCache) Get(key Key) (interface{}, bool) {
 	c.muMain.RLock()
@@ -300,39 +254,6 @@ func (c *lruCacheTripleLock) Set(key Key, value interface{}) bool {
 	if _, exists := items[key]; !exists {
 		c.addItem(key, value)
 	}
-	c.muMain.Unlock()
-	return false
-}
-
-func (c *lruItemCacheSingleLock) Set(key Key, value interface{}) bool {
-	// we need to make sure when we move to front item is not deleted from queue
-	c.muMain.Lock()
-	defer c.muMain.Unlock()
-	item := c.items[key]
-	if item != nil {
-		c.lruCache.setItem(item, value)
-		return true
-	}
-
-	c.helper.clearAndAddItem(c.lruCache, key, value)
-	return false
-}
-
-func (c *lruItemCacheDoubleLock) Set(key Key, value interface{}) bool {
-	// we need to make sure when we move to front item is not deleted from queue
-	c.muMain.RLock()
-	item := c.items[key]
-	if item != nil {
-		c.muQueue.Lock()
-		c.lruCache.setItem(item, value)
-		c.muQueue.Unlock()
-		c.muMain.RUnlock()
-		return true
-	}
-	c.muMain.RUnlock()
-
-	c.muMain.Lock()
-	c.helper.clearAndAddItem(c.lruCache, key, value)
 	c.muMain.Unlock()
 	return false
 }

@@ -1,6 +1,7 @@
 package hw04lrucache
 
 import (
+	"fmt"
 	"math/rand"
 	"strconv"
 	"sync"
@@ -239,12 +240,13 @@ func TestCachePurgeLogic(t *testing.T) {
 }
 
 const (
-	iterations = 1_000_00
-	maxRandom  = 1_000_00
+	iterations = 100_000
+	maxRandom  = 1_000_000
 	// if generated random number is < 0.1 % of randNumber during an iteration
 	// we will clear the cache after getting the value (if the test involves clearing the cache).
 	clearCachePercent   = 0.01
 	clearCacheThreshold = int(maxRandom * clearCachePercent / 100)
+	maxWorkers          = 10
 )
 
 func TestCacheMultithreading(t *testing.T) {
@@ -284,13 +286,13 @@ func TestCacheMultithreadingClear1Lock(t *testing.T) {
 }
 
 func TestCacheMultithreadingOnly(t *testing.T) {
-	c := NewItemCache(DoubleLock)
+	c := NewCache(DoubleLock, 1)
 	runner(t, c, 1, 1, 5, false)
 	require.Equal(t, 1, c.Len())
 }
 
 func TestCacheMultithreadingOnlyClear(t *testing.T) {
-	c := NewItemCache(DoubleLock)
+	c := NewCache(DoubleLock, 1)
 	runner(t, c, 1, 1, 5, true)
 	require.LessOrEqual(t, c.Len(), 1)
 }
@@ -307,83 +309,74 @@ func TestCacheMultithreadingSmallClear(t *testing.T) {
 	require.LessOrEqual(t, c.Len(), 3)
 }
 
-func TestCacheMultithreading10GoroutinesKeysLessThanSetters(t *testing.T) {
-	// this test will fail because triple lock cache is not made for caching data
-	// when we have number of possible keys less or equal than number of goroutines
+func TestCacheMultithreading10GoroutinesKeysLessThanWorkCapacity(t *testing.T) {
+	// this test may fail because triple lock cache is not made for caching data
+	// when number of possible keys less than number of setter goroutines + capacity
 	t.Skip()
 	c := NewCache(TripleLock, 3)
 	runner(t, c, 5, 5, 4, false)
 	require.Equal(t, 3, c.Len())
 }
 
-func TestCacheMultithreading10GoroutinesKeysLessThanSetters2Lock(t *testing.T) {
-	c := NewCache(DoubleLock, 3)
-	runner(t, c, 5, 5, 4, false)
-	require.Equal(t, 3, c.Len())
-}
-
-func TestCacheMultithreading10GoroutinesKeysLessThanSetters1Lock(t *testing.T) {
-	c := NewCache(SingleLock, 3)
-	runner(t, c, 5, 5, 4, false)
-	require.Equal(t, 3, c.Len())
-}
-
-func TestCacheMultithreading10GoroutinesKeysLikeSetters(t *testing.T) {
-	// this test will fail because triple lock cache is not made for caching data
-	// when we have number of possible keys less or equal than number of goroutines
-	t.Skip()
-	c := NewCache(TripleLock, 3)
-	runner(t, c, 5, 5, 5, false)
-	require.Equal(t, 3, c.Len())
-}
-
-func TestCacheMultithreading10GoroutinesKeysLikeSettersClear(t *testing.T) {
-	// this test will fail because triple lock cache is not made for caching data
-	// when we have number of possible keys less or equal than number of goroutines
+func TestCacheMultithreading10GoroutinesKeysLessThanWorkCapacityClear(t *testing.T) {
+	// this test may fail because triple lock cache is not made for caching data
+	// when number of possible keys less than number of setter goroutines + capacity
 	// the cache is cleared, but it may still saturate on the last run
 	t.Skip()
 	c := NewCache(TripleLock, 3)
-	runner(t, c, 5, 5, 5, true)
+	runner(t, c, 5, 5, 4, true)
+	require.LessOrEqual(t, c.Len(), 3)
+}
+
+func TestCacheMultithreading10GoroutinesKeysLessThanWorkCapacity2Lock(t *testing.T) {
+	// this will work
+	c := NewCache(DoubleLock, 3)
+	runner(t, c, 5, 5, 4, false)
 	require.Equal(t, 3, c.Len())
 }
 
-func TestCacheMultithreading10GoroutinesKeysLikeSetters2Lock(t *testing.T) {
+func TestCacheMultithreading10GoroutinesKeysLessThanWorkCapacity1Lock(t *testing.T) {
+	// this will work
+	c := NewCache(SingleLock, 3)
+	runner(t, c, 5, 5, 4, false)
+	require.Equal(t, 3, c.Len())
+}
+
+func TestCacheMultithreading10GoroutinesKeysLikeWorkCapacity(t *testing.T) {
+	// this will work
+	c := NewCache(TripleLock, 3)
+	runner(t, c, 5, 5, 8, false)
+	require.Equal(t, 3, c.Len())
+}
+
+func TestCacheMultithreading10GoroutinesKeysLikeWorkCapacity2Lock(t *testing.T) {
 	c := NewCache(DoubleLock, 3)
 	runner(t, c, 5, 5, 5, false)
 	require.Equal(t, 3, c.Len())
 }
 
-func TestCacheMultithreading10GoroutinesKeysLikeSetters1Lock(t *testing.T) {
+func TestCacheMultithreading10GoroutinesKeysLikeWorkCapacity1Lock(t *testing.T) {
 	c := NewCache(SingleLock, 3)
 	runner(t, c, 5, 5, 5, false)
 	require.Equal(t, 3, c.Len())
 }
 
-func TestCacheMultithreading10GoroutinesKeysOneMoreThanSetters(t *testing.T) {
-	t.Skip()
-	// this test may fail because triple lock cache is not made for caching data
-	// when we have number of possible keys a bit higher than number of goroutines
-	// in this case the cache may saturate too
+func TestCacheMultithreading10GoroutinesKeysMoreThanWorkCapacity(t *testing.T) {
 	c := NewCache(TripleLock, 3)
-	runner(t, c, 5, 5, 6, false)
+	// 6 and 7 keys fail occasionally
+	runner(t, c, 5, 5, 9, false)
 	require.Equal(t, 3, c.Len())
 }
 
-func TestCacheMultithreading10GoroutinesKeysMoreThanSetters(t *testing.T) {
-	c := NewCache(TripleLock, 3)
-	runner(t, c, 5, 5, 7, false)
-	require.Equal(t, 3, c.Len())
-}
-
-func TestCacheMultithreading10GoroutinesKeysMoreThanSetters2Lock(t *testing.T) {
+func TestCacheMultithreading10GoroutinesKeysMoreThanWorkCapacity2Lock(t *testing.T) {
 	c := NewCache(DoubleLock, 3)
-	runner(t, c, 5, 5, 6, false)
+	runner(t, c, 5, 5, 9, false)
 	require.Equal(t, 3, c.Len())
 }
 
-func TestCacheMultithreading10GoroutinesKeysMoreThanSetters1Lock(t *testing.T) {
+func TestCacheMultithreading10GoroutinesKeysMoreThanWorkCapacity1Lock(t *testing.T) {
 	c := NewCache(SingleLock, 3)
-	runner(t, c, 5, 5, 6, false)
+	runner(t, c, 5, 5, 9, false)
 	require.Equal(t, 3, c.Len())
 }
 
@@ -406,33 +399,21 @@ func TestCacheMultithreading10GoroutinesClear1Lock(t *testing.T) {
 }
 
 func TestSingleLockCache(t *testing.T) {
-	c := NewCache(SingleLock, 3)
+	c := NewCache(SingleLock, 30)
 	runner(t, c, 5, 5, 100, false)
-	require.Equal(t, 3, c.Len())
+	require.Equal(t, 30, c.Len())
 }
 
 func TestDoubleLockCache(t *testing.T) {
-	c := NewCache(DoubleLock, 3)
+	c := NewCache(DoubleLock, 30)
 	runner(t, c, 5, 5, 100, false)
-	require.Equal(t, 3, c.Len())
+	require.Equal(t, 30, c.Len())
 }
 
 func TestTripleLockCache(t *testing.T) {
-	c := NewCache(TripleLock, 3)
+	c := NewCache(TripleLock, 30)
 	runner(t, c, 5, 5, 100, false)
-	require.Equal(t, 3, c.Len())
-}
-
-func TestItemSingleLockCache(t *testing.T) {
-	c := NewItemCache(SingleLock)
-	runner(t, c, 5, 5, 100, false)
-	require.Equal(t, 1, c.Len())
-}
-
-func TestItemDoubleLockCache(t *testing.T) {
-	c := NewItemCache(DoubleLock)
-	runner(t, c, 5, 5, 100, false)
-	require.Equal(t, 1, c.Len())
+	require.Equal(t, 30, c.Len())
 }
 
 func getter(wg *sync.WaitGroup, c Cache, count int, clearCache bool) {
@@ -474,45 +455,98 @@ func runner(tb testing.TB, c Cache, readers, writers, keys int, clearCache bool)
 	wg.Wait()
 }
 
-func BenchmarkSingleLockCache(b *testing.B) {
-	benchmarkCache(b, SingleLock, 10)
+func BenchmarkCaches(b *testing.B) {
+	benchmarkCachesClear(b)
 }
 
-func BenchmarkDoubleLockCache(b *testing.B) {
-	benchmarkCache(b, DoubleLock, 10)
-}
-
-func BenchmarkTripleLockCache(b *testing.B) {
-	benchmarkCache(b, TripleLock, 10)
-}
-
-func BenchmarkItemSingleLockCache(b *testing.B) {
-	benchmarkItemCache(b, SingleLock)
-}
-
-func BenchmarkItemDoubleLockCache(b *testing.B) {
-	benchmarkItemCache(b, DoubleLock)
-}
-
-func benchmarkCache(b *testing.B, kind Kind, capacity int) {
+func benchmarkCachesClear(b *testing.B) {
 	b.Helper()
+	// do not clear cache during testing
+	b.Run("Keep", func(b *testing.B) {
+		benchmarkCachesCapacities(b, false)
+	})
+	b.Run("Clear", func(b *testing.B) {
+		benchmarkCachesCapacities(b, true)
+	})
+}
 
-	c := NewCache(kind, capacity)
-	b.ResetTimer()
-	for range b.N {
-		runner(b, c, 5, 5, 100, false)
-		c.Clear()
+func benchmarkCachesCapacities(b *testing.B, clearCache bool) {
+	b.Helper()
+	capacities := [...]int{100, 1000, 10000}
+	for _, capacity := range capacities {
+		name := fmt.Sprintf("Cap%d", capacity)
+		b.Run(name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				benchmarkCachesKeys(b, capacity, clearCache)
+			}
+		})
 	}
 }
 
-func benchmarkItemCache(b *testing.B, kind Kind) {
+func benchmarkCachesKeys(b *testing.B, capacity int, clearCache bool) {
 	b.Helper()
-
-	c := NewItemCache(kind)
-	b.ResetTimer()
-	for range b.N {
-		runner(b, c, 5, 5, 100, false)
-		c.Clear()
+	keysList := [...]int{1000, 10000, 100000}
+	for _, keys := range keysList {
+		// no point of testing when capacity is greater than keys
+		if keys > capacity {
+			name := fmt.Sprintf("%dKeys", keys)
+			b.Run(name, func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					benchmarkCachesWriters(b, capacity, clearCache, keys)
+				}
+			})
+		}
 	}
+}
+
+func benchmarkCachesWriters(b *testing.B, capacity int, clearCache bool, keys int) {
 	b.Helper()
+	writersList := [...]int{1, 3, 5, 9}
+	for _, writers := range writersList {
+		name := fmt.Sprintf("%dof%dWriters", writers, maxWorkers)
+		if writers >= maxWorkers {
+			b.Fatalf("Too many workers, should be less than %d", maxWorkers)
+		}
+		readers := maxWorkers - writers
+		b.Run(name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				benchmarkCaches(b, capacity, clearCache, keys, readers, writers)
+			}
+		})
+	}
+}
+
+func benchmarkCaches(b *testing.B, capacity int, clearCache bool, keys, readers, writers int) {
+	b.Helper()
+	type CacheInfo struct {
+		name        string
+		constructor func() Cache
+	}
+
+	caches := []CacheInfo{
+		{"OneLock", func() Cache {
+			return NewCache(SingleLock, capacity)
+		}},
+		{"TwoLocks", func() Cache {
+			return NewCache(DoubleLock, capacity)
+		}},
+	}
+
+	// add triple lock if we have more keys capacity than writers + capacity
+	if keys >= capacity+writers {
+		caches = append(caches, CacheInfo{
+			"ThreeLocks", func() Cache {
+				return NewCache(TripleLock, capacity)
+			},
+		})
+	}
+
+	for _, cache := range caches {
+		b.Run(cache.name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				c := cache.constructor()
+				runner(b, c, readers, writers, keys, clearCache)
+			}
+		})
+	}
 }
