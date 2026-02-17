@@ -18,9 +18,9 @@ type Kind int
 
 const (
 	NoLock     = iota
-	SingleLock // 0
-	DoubleLock // 1
-	TripleLock // 2
+	SingleLock // 1
+	DoubleLock // 2
+	TripleLock // 3
 )
 
 func (k Kind) String() string {
