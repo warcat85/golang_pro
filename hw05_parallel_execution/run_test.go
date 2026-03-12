@@ -242,6 +242,7 @@ func EventualSuccessRun(t *testing.T) {
 	t.Helper()
 
 	tasksCount := 50
+	maxErrorsCount := 1
 	taskSleep := time.Millisecond * time.Duration(10)
 
 	t.Run("(eventually) tasks without errors", func(t *testing.T) {
@@ -255,7 +256,6 @@ func EventualSuccessRun(t *testing.T) {
 			})
 
 		workersCount := 5
-		maxErrorsCount := 1
 
 		timeout := time.Duration(int(taskSleep)*tasksCount) / 2
 		err := Run(tasks, workersCount, maxErrorsCount)
@@ -303,7 +303,6 @@ func EventualSuccessRun(t *testing.T) {
 			})
 
 		workersCount := 1
-		maxErrorsCount := 1
 
 		timeout := time.Duration(int(taskSleep) * tasksCount)
 		err := Run(tasks, workersCount, maxErrorsCount)
@@ -328,7 +327,6 @@ func EventualSuccessRun(t *testing.T) {
 			})
 
 		workersCount := 10
-		maxErrorsCount := 1
 
 		timeout := time.Duration(float64(taskSleep) * float64(tasksCount) / float64(workersCount) * 1.25)
 		err := Run(tasks, workersCount, maxErrorsCount)
@@ -354,7 +352,6 @@ func EventualSuccessRun(t *testing.T) {
 			})
 
 		workersCount := 5
-		maxErrorsCount := 1
 
 		timeout := time.Duration(float64(taskSleep) * float64(tasksCount) / float64(workersCount))
 		err := Run(tasks, workersCount, maxErrorsCount)
