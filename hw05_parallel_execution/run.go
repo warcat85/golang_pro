@@ -38,17 +38,17 @@ func Run(tasks []Task, n, m int) error {
 	wg.Add(numWorkers)
 	for range numWorkers {
 		go func() {
-		WorkerLoop:
+			defer wg.Done()
 			for {
 				select {
 				case <-terminator:
 					{
-						break WorkerLoop
+						return
 					}
 				case task, ok := <-executor:
 					{
 						if !ok || errorsExceeded.Load() {
-							break WorkerLoop
+							return
 						}
 						if task() != nil {
 							// adds one and terminates if exceeded and not terminating
@@ -56,12 +56,12 @@ func Run(tasks []Task, n, m int) error {
 							if numErrors.Add(1) == maxErrors &&
 								errorsExceeded.CompareAndSwap(false, true) {
 								close(terminator)
+								return
 							}
 						}
 					}
 				}
 			}
-			wg.Done()
 		}()
 	}
 
