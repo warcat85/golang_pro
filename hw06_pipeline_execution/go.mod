@@ -1,4 +1,4 @@
-module github.com/fixme_my_friend/hw06_pipeline_execution
+module github.com/warcat85/golang_pro/hw06_pipeline_execution
 
 go 1.23
 
@@ -7,5 +7,6 @@ require github.com/stretchr/testify v1.10.0
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
+	go.uber.org/goleak v1.3.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
