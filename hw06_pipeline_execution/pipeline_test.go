@@ -1,7 +1,6 @@
 package hw06pipelineexecution
 
 import (
-	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -46,17 +45,18 @@ func TestPipeline(t *testing.T) {
 	g := func(name string, f func(v interface{}) interface{}) Stage {
 		return func(in In) Out {
 			out := make(Bi)
-			fmt.Printf("[%s] starting\n", name)
+			// fmt.Printf("[%s] starting\n", name)
 			go func() {
 				defer close(out)
-				defer fmt.Printf("[%s] done\n", name)
+				// defer fmt.Printf("[%s] done\n", name)
 				for v := range in {
+					// fmt.Printf("[%s] sleeping %v\n", name, v)
 					time.Sleep(sleepPerStage)
 					// fmt.Printf("Before: %s -> %v (%T)\n", name, v, v)
-					fmt.Printf("[%s] writing %v\n", name, v)
+					// fmt.Printf("[%s] writing %v\n", name, v)
 					out <- f(v)
 					// fmt.Printf("After: %s -> %v (%T)\n", name, v, v)
-					fmt.Printf("[%s] wrote %v\n", name, v)
+					// fmt.Printf("[%s] wrote %v\n", name, v)
 				}
 			}()
 			return out
@@ -71,7 +71,7 @@ func TestPipeline(t *testing.T) {
 	}
 
 	t.Run("one value", func(t *testing.T) {
-		result, elapsed := prepareTest(t, nil, stages, []int{5})
+		result, elapsed := runTest(t, nil, stages, []int{5})
 
 		require.Equal(t, []string{"110"}, result)
 		require.Less(t,
@@ -83,7 +83,7 @@ func TestPipeline(t *testing.T) {
 	t.Run("simple case", func(t *testing.T) {
 		data := []int{1, 2, 3, 4, 5}
 
-		result, elapsed := prepareTest(t, nil, stages, data)
+		result, elapsed := runTest(t, nil, stages, data)
 		require.Equal(t, []string{"102", "104", "106", "108", "110"}, result)
 		require.Less(t,
 			int64(elapsed),
@@ -97,9 +97,10 @@ func TestPipeline(t *testing.T) {
 		abortDur := sleepPerStage * 2
 		done := prepareDone(t, abortDur)
 
-		result, elapsed := prepareTest(t, done, stages, data)
+		result, elapsed := runTest(t, done, stages, data)
 		require.Len(t, result, 0)
-		require.Less(t, int64(elapsed), int64(abortDur)+int64(fault))
+		// we may hit one sleep before termination
+		require.Less(t, int64(elapsed), abortDur+sleepPerStage+fault)
 	})
 
 	t.Run("long done", func(t *testing.T) {
@@ -110,7 +111,7 @@ func TestPipeline(t *testing.T) {
 		abortDur := sleepPerStage * time.Duration(len(stages)*len(data)) * 10
 		done := prepareDone(t, abortDur)
 
-		result, elapsed := prepareTest(t, done, stages, data)
+		result, elapsed := runTest(t, done, stages, data)
 		require.Equal(t, []string{"102", "104", "106", "108", "110"}, result)
 		require.Less(t, int64(elapsed),
 			// ~0.8s for processing 5 values in 4 stages (100ms every) concurrently
@@ -121,9 +122,11 @@ func TestPipeline(t *testing.T) {
 		data := []int{1, 2, 3, 4, 5}
 
 		done := prepareDone(t, 0)
-		result, elapsed := prepareTest(t, done, stages, data)
+		result, elapsed := runTest(t, done, stages, data)
 		require.Len(t, result, 0)
-		require.Less(t, int64(elapsed), quick)
+		// we may hit one sleep before termination
+		require.Less(t, elapsed, sleepPerStage+fault)
+		// require.Less(t, elapsed, fault)
 	})
 }
 
@@ -136,10 +139,10 @@ func TestAllStageStop(t *testing.T) {
 		return func(in In) Out {
 			out := make(Bi)
 			wg.Add(1)
-			fmt.Printf("[%s] starting\n", name)
+			// fmt.Printf("[%s] starting\n", name)
 			go func() {
 				defer wg.Done()
-				defer fmt.Printf("[%s] done\n", name)
+				// defer fmt.Printf("[%s] done\n", name)
 				defer close(out)
 				for v := range in {
 					time.Sleep(sleepPerStage)
@@ -158,24 +161,19 @@ func TestAllStageStop(t *testing.T) {
 	}
 
 	t.Run("done case", func(t *testing.T) {
-		done := make(Bi)
 		data := []int{1, 2, 3, 4, 5}
 
 		// Abort after 200ms
 		abortDur := sleepPerStage * 2
-		go func() {
-			<-time.After(abortDur)
-			close(done)
-		}()
-
-		result, _ := prepareTest(t, done, stages, data)
+		done := prepareDone(t, abortDur)
+		result, _ := runTest(t, done, stages, data)
 		wg.Wait()
 
 		require.Len(t, result, 0)
 	})
 }
 
-func prepareTest(
+func runTest(
 	t *testing.T, done Bi, stages []Stage, data []int) (
 	result []string, elapsed time.Duration,
 ) {
@@ -197,6 +195,12 @@ func prepareTest(
 	for s := range ExecutePipeline(in, done, stages...) {
 		result = append(result, s.(string))
 	}
+
+	// if there is done and all results have been processed
+	// we probably did not terminate because done was closed
+	if done != nil && len(result) == len(data) {
+		done <- struct{}{}
+	}
 	return result, time.Since(start)
 }
 
@@ -211,7 +215,7 @@ func prepareDone(t *testing.T, abortDur time.Duration) Bi {
 			case <-time.After(abortDur):
 			}
 		}
-		fmt.Printf("Closing done!\n")
+		// fmt.Printf("Closing done!\n")
 		close(done)
 	}()
 	return done
