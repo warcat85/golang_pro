@@ -28,9 +28,7 @@ func ExecutePipeline(in In, done In, stages ...Stage) Out {
 }
 
 func canceler(in In, done In, name string) Out {
-	// func canceler(in In, done In, completed Bi, wg *sync.WaitGroup, name string) (Out, Out) {
 	if done == nil {
-		// return in, nil
 		return in
 	}
 	out := make(Bi)
@@ -43,7 +41,6 @@ func canceler(in In, done In, name string) Out {
 			select {
 			case <-done:
 				drain(in, name)
-				// terminated = true
 				// fmt.Printf("[%s] returning (done/receive)\n", name)
 				return
 			case v, ok := <-in:
@@ -55,7 +52,6 @@ func canceler(in In, done In, name string) Out {
 				select {
 				case <-done:
 					drain(in, name)
-					// terminated = true
 					// fmt.Printf("[%s] returning (done/send)\n", name)
 					return
 				case out <- v:
@@ -63,12 +59,12 @@ func canceler(in In, done In, name string) Out {
 			}
 		}
 	}()
-	// return out, completed
 	return out
 }
 
 func drain(in In, name string) {
-	for range in {
+	for v := range in {
+		_ = v
 		// fmt.Printf("[%s] draining -> %v\n", name, v)
 	}
 }

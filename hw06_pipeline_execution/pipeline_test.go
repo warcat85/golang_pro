@@ -48,7 +48,7 @@ func TestPipeline(t *testing.T) {
 			// fmt.Printf("[%s] starting\n", name)
 			go func() {
 				defer close(out)
-				// defer fmt.Printf("[%s] done\n", name)
+				// // defer fmt.Printf("[%s] done\n", name)
 				for v := range in {
 					// fmt.Printf("[%s] sleeping %v\n", name, v)
 					time.Sleep(sleepPerStage)
@@ -63,15 +63,10 @@ func TestPipeline(t *testing.T) {
 		}
 	}
 
-	stages := []Stage{
-		g("Dummy", func(v interface{}) interface{} { return v }),
-		g("Multiplier (* 2)", func(v interface{}) interface{} { return v.(int) * 2 }),
-		g("Adder (+ 100)", func(v interface{}) interface{} { return v.(int) + 100 }),
-		g("Stringifier", func(v interface{}) interface{} { return strconv.Itoa(v.(int)) }),
-	}
+	stages := generateStages(g)
 
 	t.Run("one value", func(t *testing.T) {
-		result, elapsed := runTest(t, nil, stages, []int{5})
+		result, elapsed := runTest(t, nil, []int{5}, stages, 1)
 
 		require.Equal(t, []string{"110"}, result)
 		require.Less(t,
@@ -83,7 +78,7 @@ func TestPipeline(t *testing.T) {
 	t.Run("simple case", func(t *testing.T) {
 		data := []int{1, 2, 3, 4, 5}
 
-		result, elapsed := runTest(t, nil, stages, data)
+		result, elapsed := runTest(t, nil, data, stages, len(data))
 		require.Equal(t, []string{"102", "104", "106", "108", "110"}, result)
 		require.Less(t,
 			int64(elapsed),
@@ -97,7 +92,7 @@ func TestPipeline(t *testing.T) {
 		abortDur := sleepPerStage * 2
 		done := prepareDone(t, abortDur)
 
-		result, elapsed := runTest(t, done, stages, data)
+		result, elapsed := runTest(t, done, data, stages, len(data))
 		require.Len(t, result, 0)
 		// we may hit one sleep before termination
 		require.Less(t, int64(elapsed), abortDur+sleepPerStage+fault)
@@ -111,7 +106,7 @@ func TestPipeline(t *testing.T) {
 		abortDur := sleepPerStage * time.Duration(len(stages)*len(data)) * 10
 		done := prepareDone(t, abortDur)
 
-		result, elapsed := runTest(t, done, stages, data)
+		result, elapsed := runTest(t, done, data, stages, len(data))
 		require.Equal(t, []string{"102", "104", "106", "108", "110"}, result)
 		require.Less(t, int64(elapsed),
 			// ~0.8s for processing 5 values in 4 stages (100ms every) concurrently
@@ -122,11 +117,10 @@ func TestPipeline(t *testing.T) {
 		data := []int{1, 2, 3, 4, 5}
 
 		done := prepareDone(t, 0)
-		result, elapsed := runTest(t, done, stages, data)
+		result, elapsed := runTest(t, done, data, stages, len(data))
 		require.Len(t, result, 0)
 		// we may hit one sleep before termination
 		require.Less(t, elapsed, sleepPerStage+fault)
-		// require.Less(t, elapsed, fault)
 	})
 }
 
@@ -139,42 +133,67 @@ func TestAllStageStop(t *testing.T) {
 		return func(in In) Out {
 			out := make(Bi)
 			wg.Add(1)
-			// fmt.Printf("[%s] starting\n", name)
+			// fmt.Printf("[%s] added\n", name)
 			go func() {
 				defer wg.Done()
 				// defer fmt.Printf("[%s] done\n", name)
 				defer close(out)
-				for v := range in {
+				for {
+					v, ok := <-in
+					if !ok {
+						// fmt.Printf("[%s] not OK %v\n", name, v)
+						return
+					}
+					// fmt.Printf("[%s] sleeping %v\n", name, v)
 					time.Sleep(sleepPerStage)
+					// fmt.Printf("[%s] trying to write %v\n", name, v)
 					out <- f(v)
+					// fmt.Printf("[%s] written %v\n", name, v)
 				}
 			}()
 			return out
 		}
 	}
 
-	stages := []Stage{
-		g("Dummy", func(v interface{}) interface{} { return v }),
-		g("Multiplier (* 2)", func(v interface{}) interface{} { return v.(int) * 2 }),
-		g("Adder (+ 100)", func(v interface{}) interface{} { return v.(int) + 100 }),
-		g("Stringifier", func(v interface{}) interface{} { return strconv.Itoa(v.(int)) }),
-	}
+	stages := generateStages(g)
+	data := []int{1, 2, 3, 4, 5}
 
 	t.Run("done case", func(t *testing.T) {
-		data := []int{1, 2, 3, 4, 5}
-
 		// Abort after 200ms
 		abortDur := sleepPerStage * 2
 		done := prepareDone(t, abortDur)
-		result, _ := runTest(t, done, stages, data)
+		result, elapsed := runTest(t, done, data, stages, len(data))
+		// fmt.Printf("[%s] Waiting\n", t.Name())
 		wg.Wait()
+		// fmt.Printf("[%s] Waited\n", t.Name())
 
 		require.Len(t, result, 0)
+		// we may hit one sleep before termination
+		require.Less(t, int64(elapsed), abortDur+sleepPerStage+fault)
+	})
+
+	t.Run("one value", func(t *testing.T) {
+		testValues(t, &wg, data, stages, 1)
+	})
+
+	t.Run("two values", func(t *testing.T) {
+		testValues(t, &wg, data, stages, 2)
+	})
+
+	t.Run("three values", func(t *testing.T) {
+		testValues(t, &wg, data, stages, 3)
+	})
+
+	t.Run("four values", func(t *testing.T) {
+		testValues(t, &wg, data, stages, 4)
+	})
+
+	t.Run("five values", func(t *testing.T) {
+		testValues(t, &wg, data, stages, 5)
 	})
 }
 
-func runTest(
-	t *testing.T, done Bi, stages []Stage, data []int) (
+func runTest(t *testing.T, done Bi, data []int, stages []Stage, items int) (
 	result []string, elapsed time.Duration,
 ) {
 	t.Helper()
@@ -194,12 +213,16 @@ func runTest(
 	start := time.Now()
 	for s := range ExecutePipeline(in, done, stages...) {
 		result = append(result, s.(string))
-	}
-
-	// if there is done and all results have been processed
-	// we probably did not terminate because done was closed
-	if done != nil && len(result) == len(data) {
-		done <- struct{}{}
+		if done != nil && len(result) == items {
+			// we simulate done after getting part/all of the results
+			// we are safe to close it here - if we reached this point - it means
+			// we did not send done signal yet and done was not closed
+			// (in theory it can happen that after returning results done will be closed
+			// but this is very unlikely)
+			// fmt.Printf("[%s] terminating %v\n", t.Name(), result)
+			close(done)
+			// fmt.Printf("[%s] terminated %v\n", t.Name(), result)
+		}
 	}
 	return result, time.Since(start)
 }
@@ -215,8 +238,44 @@ func prepareDone(t *testing.T, abortDur time.Duration) Bi {
 			case <-time.After(abortDur):
 			}
 		}
-		// fmt.Printf("Closing done!\n")
+		// fmt.Printf("[%s] closing done\n", t.Name())
 		close(done)
+		// fmt.Printf("[%s] closed done\n", t.Name())
 	}()
 	return done
+}
+
+func generateStages(g func(name string, f func(v interface{}) interface{}) Stage) []Stage {
+	return []Stage{
+		g("Dummy", func(v interface{}) interface{} { return v }),
+		g("Multiplier (* 2)", func(v interface{}) interface{} { return v.(int) * 2 }),
+		g("Adder (+ 100)", func(v interface{}) interface{} { return v.(int) + 100 }),
+		g("Stringifier", func(v interface{}) interface{} { return strconv.Itoa(v.(int)) }),
+	}
+}
+
+func testValues(t *testing.T, wg *sync.WaitGroup, data []int, stages []Stage, items int) {
+	t.Helper()
+	done := make(Bi)
+	result, elapsed := runTest(t, done, data, stages, items)
+	// fmt.Printf("[%s] Waiting\n", t.Name())
+	wg.Wait()
+	// fmt.Printf("[%s] Waited\n", t.Name())
+
+	numResults := len(result)
+	// fmt.Printf("[%s] results %v\n", t.Name(), numResults)
+	require.GreaterOrEqual(t, numResults, items)
+	require.Equal(t, []string{"102", "104", "106", "108", "110"}[:numResults], result)
+
+	// every item we processed all stages (0.1s per stage)
+	stagesAllItems := items * len(stages)
+	// for all other items we may have processed at least one stage
+	otherStages := len(data) - items
+
+	require.Less(t,
+		int64(elapsed),
+		// for the required items we processed all stages (0.4s per item)
+		// and we may have processed at least one stage for all other items
+		// (0.1 second for every unprocessed item)
+		int64(sleepPerStage)*int64(stagesAllItems+otherStages)+int64(fault))
 }
