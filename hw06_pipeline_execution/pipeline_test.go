@@ -13,50 +13,32 @@ import (
 const (
 	sleepPerStage = time.Millisecond * 100
 	fault         = sleepPerStage / 2
-	quick         = time.Millisecond
+	noSleep       = time.Millisecond * 3
+	// that much time it takes to process full pipeline except sleeps.
 )
 
 func TestPipeline(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
+	data := []int{1, 2, 3, 4, 5}
+
+	// no stages are passed - returns the same slice
 	t.Run("no stages", func(t *testing.T) {
-		in := make(Bi)
-		data := []int{1, 2, 3, 4, 5}
+		result, elapsed := runSimpleTest[int](t, data)
 
-		go func() {
-			for _, v := range data {
-				in <- v
-			}
-			close(in)
-		}()
-
-		result := make([]int, 0, 10)
-		start := time.Now()
-		for s := range ExecutePipeline(in, nil) {
-			result = append(result, s.(int))
-		}
-		elapsed := time.Since(start)
-
-		require.Equal(t, []int{1, 2, 3, 4, 5}, result)
-		require.Less(t, int64(elapsed), int64(quick))
+		require.Equal(t, data, result)
+		require.Less(t, elapsed, noSleep)
 	})
 
 	// Stage generator
-	g := func(name string, f func(v interface{}) interface{}) Stage {
+	g := func(_ string, f func(v interface{}) interface{}) Stage {
 		return func(in In) Out {
 			out := make(Bi)
-			// fmt.Printf("[%s] starting\n", name)
 			go func() {
 				defer close(out)
-				// // defer fmt.Printf("[%s] done\n", name)
 				for v := range in {
-					// fmt.Printf("[%s] sleeping %v\n", name, v)
 					time.Sleep(sleepPerStage)
-					// fmt.Printf("Before: %s -> %v (%T)\n", name, v, v)
-					// fmt.Printf("[%s] writing %v\n", name, v)
 					out <- f(v)
-					// fmt.Printf("After: %s -> %v (%T)\n", name, v, v)
-					// fmt.Printf("[%s] wrote %v\n", name, v)
 				}
 			}()
 			return out
@@ -66,61 +48,70 @@ func TestPipeline(t *testing.T) {
 	stages := generateStages(g)
 
 	t.Run("one value", func(t *testing.T) {
-		result, elapsed := runTest(t, nil, []int{5}, stages, 1)
+		result, elapsed := runSimpleTest[string](t, []int{5}, stages...)
 
 		require.Equal(t, []string{"110"}, result)
 		require.Less(t,
-			int64(elapsed),
+			elapsed,
 			// ~0.4s for processing 1 value in 4 stages (100ms every) concurrently
-			int64(sleepPerStage)*int64(len(stages))+int64(fault))
+			sleepPerStage*time.Duration(len(stages))+fault)
 	})
 
 	t.Run("simple case", func(t *testing.T) {
-		data := []int{1, 2, 3, 4, 5}
-
-		result, elapsed := runTest(t, nil, data, stages, len(data))
+		result, elapsed := runSimpleTest[string](t, data, stages...)
 		require.Equal(t, []string{"102", "104", "106", "108", "110"}, result)
 		require.Less(t,
-			int64(elapsed),
+			elapsed,
 			// ~0.8s for processing 5 values in 4 stages (100ms every) concurrently
-			int64(sleepPerStage)*int64(len(stages)+len(data)-1)+int64(fault))
+			sleepPerStage*time.Duration(len(stages)+len(data)-1)+fault)
 	})
 
 	t.Run("done case", func(t *testing.T) {
-		data := []int{1, 2, 3, 4, 5}
 		// Abort after 200ms
 		abortDur := sleepPerStage * 2
-		done := prepareDone(t, abortDur)
+		result, elapsed := runTimedTest(t, abortDur, data, stages)
 
-		result, elapsed := runTest(t, done, data, stages, len(data))
 		require.Len(t, result, 0)
-		// we may hit one sleep before termination
-		require.Less(t, int64(elapsed), abortDur+sleepPerStage+fault)
+		require.Less(t, elapsed, abortDur+fault)
 	})
 
 	t.Run("long done", func(t *testing.T) {
-		data := []int{1, 2, 3, 4, 5}
-
 		// Abort after 100 * 4 * 5 = 1000ms
 		// Longer that it would actually take to process all values
 		abortDur := sleepPerStage * time.Duration(len(stages)*len(data)) * 10
-		done := prepareDone(t, abortDur)
 
-		result, elapsed := runTest(t, done, data, stages, len(data))
+		result, elapsed := runTimedTest(t, abortDur, data, stages)
 		require.Equal(t, []string{"102", "104", "106", "108", "110"}, result)
-		require.Less(t, int64(elapsed),
+		require.Less(t, elapsed,
 			// ~0.8s for processing 5 values in 4 stages (100ms every) concurrently
-			int64(sleepPerStage)*int64(len(stages)+len(data)-1)+int64(fault))
+			sleepPerStage*time.Duration(len(stages)+len(data)-1)+fault)
 	})
 
+	// the pipeline is cancelled straight after starting
 	t.Run("done first", func(t *testing.T) {
 		data := []int{1, 2, 3, 4, 5}
 
-		done := prepareDone(t, 0)
-		result, elapsed := runTest(t, done, data, stages, len(data))
+		result, elapsed := runTimedTest(t, 0, data, stages)
 		require.Len(t, result, 0)
-		// we may hit one sleep before termination
-		require.Less(t, elapsed, sleepPerStage+fault)
+		require.Less(t, elapsed, fault)
+	})
+
+	// test that may either return 5 items or return 4 items after timer expires
+	// makes sure there is no race condition in closing done channel
+	t.Run("done at end", func(t *testing.T) {
+		data := []int{1, 2, 3, 4, 5}
+		// Abort after 803ms. We will either finish or trigger timer
+		// 3 ms is how much on average time we spend not sleeping
+		// this will either create 4 items and stop or will create 5 items
+		abortDur := sleepPerStage*8 + noSleep
+		result, elapsed := runTimedTest(t, abortDur, data, stages)
+		numResults := len(result)
+		// require.Len(t, result, 0)
+		require.GreaterOrEqual(t, numResults, 4)
+		require.LessOrEqual(t, numResults, 5)
+		require.Equal(t, []string{"102", "104", "106", "108", "110"}[:numResults], result)
+		// added a bit of extra time to finish
+		require.Less(t, elapsed, abortDur+noSleep)
 	})
 }
 
@@ -129,26 +120,20 @@ func TestAllStageStop(t *testing.T) {
 
 	wg := sync.WaitGroup{}
 	// Stage generator
-	g := func(name string, f func(v interface{}) interface{}) Stage {
+	g := func(_ string, f func(v interface{}) interface{}) Stage {
 		return func(in In) Out {
 			out := make(Bi)
 			wg.Add(1)
-			// fmt.Printf("[%s] added\n", name)
 			go func() {
 				defer wg.Done()
-				// defer fmt.Printf("[%s] done\n", name)
 				defer close(out)
 				for {
 					v, ok := <-in
 					if !ok {
-						// fmt.Printf("[%s] not OK %v\n", name, v)
 						return
 					}
-					// fmt.Printf("[%s] sleeping %v\n", name, v)
 					time.Sleep(sleepPerStage)
-					// fmt.Printf("[%s] trying to write %v\n", name, v)
 					out <- f(v)
-					// fmt.Printf("[%s] written %v\n", name, v)
 				}
 			}()
 			return out
@@ -161,43 +146,100 @@ func TestAllStageStop(t *testing.T) {
 	t.Run("done case", func(t *testing.T) {
 		// Abort after 200ms
 		abortDur := sleepPerStage * 2
-		done := prepareDone(t, abortDur)
-		result, elapsed := runTest(t, done, data, stages, len(data))
-		// fmt.Printf("[%s] Waiting\n", t.Name())
+		result, elapsed := runTimedTest(t, abortDur, data, stages)
 		wg.Wait()
-		// fmt.Printf("[%s] Waited\n", t.Name())
 
 		require.Len(t, result, 0)
-		// we may hit one sleep before termination
-		require.Less(t, int64(elapsed), abortDur+sleepPerStage+fault)
+		require.Less(t, elapsed, abortDur+fault)
 	})
 
 	t.Run("one value", func(t *testing.T) {
-		testValues(t, &wg, data, stages, 1)
+		testPartial(t, &wg, data, stages, 1)
 	})
 
 	t.Run("two values", func(t *testing.T) {
-		testValues(t, &wg, data, stages, 2)
+		testPartial(t, &wg, data, stages, 2)
 	})
 
 	t.Run("three values", func(t *testing.T) {
-		testValues(t, &wg, data, stages, 3)
+		testPartial(t, &wg, data, stages, 3)
 	})
 
 	t.Run("four values", func(t *testing.T) {
-		testValues(t, &wg, data, stages, 4)
+		testPartial(t, &wg, data, stages, 4)
 	})
 
 	t.Run("five values", func(t *testing.T) {
-		testValues(t, &wg, data, stages, 5)
+		testPartial(t, &wg, data, stages, 5)
 	})
 }
 
-func runTest(t *testing.T, done Bi, data []int, stages []Stage, items int) (
+func runSimpleTest[T int | string](t *testing.T, data []int, stages ...Stage) (
+	result []T, elapsed time.Duration,
+) {
+	t.Helper()
+	in := make(Bi)
+	go func() {
+		defer close(in)
+		for _, v := range data {
+			in <- v
+		}
+	}()
+
+	result = make([]T, 0, 10)
+	start := time.Now()
+	for s := range ExecutePipeline(in, nil, stages...) {
+		result = append(result, s.(T))
+	}
+	return result, time.Since(start)
+}
+
+func runTimedTest(t *testing.T, abortDur time.Duration, data []int, stages []Stage) (
 	result []string, elapsed time.Duration,
 ) {
 	t.Helper()
 	in := make(Bi)
+	done := make(Bi)
+	timer := abortAfter(t, abortDur, done)
+
+	go func() {
+		defer close(in)
+		for _, v := range data {
+			select {
+			case <-done:
+				return
+			case in <- v:
+			}
+		}
+	}()
+
+	result = make([]string, 0, 10)
+	start := time.Now()
+	out := ExecutePipeline(in, done, stages...)
+
+resultLoop:
+	for {
+		select {
+		case s, ok := <-out:
+			if !ok {
+				close(done)
+				break resultLoop
+			}
+			result = append(result, s.(string))
+		case <-timer:
+			close(done)
+			break resultLoop
+		}
+	}
+	return result, time.Since(start)
+}
+
+func runPartialTest(t *testing.T, data []int, stages []Stage, numItems int) (
+	result []string, elapsed time.Duration,
+) {
+	t.Helper()
+	in := make(Bi)
+	done := make(Bi)
 	go func() {
 		defer close(in)
 		for _, v := range data {
@@ -213,36 +255,34 @@ func runTest(t *testing.T, done Bi, data []int, stages []Stage, items int) (
 	start := time.Now()
 	for s := range ExecutePipeline(in, done, stages...) {
 		result = append(result, s.(string))
-		if done != nil && len(result) == items {
-			// we simulate done after getting part/all of the results
-			// we are safe to close it here - if we reached this point - it means
-			// we did not send done signal yet and done was not closed
-			// (in theory it can happen that after returning results done will be closed
-			// but this is very unlikely)
-			// fmt.Printf("[%s] terminating %v\n", t.Name(), result)
+		if len(result) == numItems {
 			close(done)
-			// fmt.Printf("[%s] terminated %v\n", t.Name(), result)
+			break
 		}
 	}
+
 	return result, time.Since(start)
 }
 
-func prepareDone(t *testing.T, abortDur time.Duration) Bi {
+/*
+Creates a channel that will be closed after specified time.
+if abortDur is 0 - will be closed immediately.
+*/
+func abortAfter(t *testing.T, abortDur time.Duration, cancel In) Bi {
 	t.Helper()
-	done := make(Bi)
+	timer := make(Bi)
 	go func() {
-		if abortDur > 0 {
-			select {
-			case <-done:
-				return
-			case <-time.After(abortDur):
-			}
+		if abortDur == 0 {
+			close(timer)
+			return
 		}
-		// fmt.Printf("[%s] closing done\n", t.Name())
-		close(done)
-		// fmt.Printf("[%s] closed done\n", t.Name())
+		select {
+		case <-time.After(abortDur):
+		case <-cancel:
+		}
+		close(timer)
 	}()
-	return done
+	return timer
 }
 
 func generateStages(g func(name string, f func(v interface{}) interface{}) Stage) []Stage {
@@ -254,28 +294,18 @@ func generateStages(g func(name string, f func(v interface{}) interface{}) Stage
 	}
 }
 
-func testValues(t *testing.T, wg *sync.WaitGroup, data []int, stages []Stage, items int) {
+// signals done when only some items were processed.
+func testPartial(t *testing.T, wg *sync.WaitGroup, data []int, stages []Stage, numItems int) {
 	t.Helper()
-	done := make(Bi)
-	result, elapsed := runTest(t, done, data, stages, items)
-	// fmt.Printf("[%s] Waiting\n", t.Name())
+	result, elapsed := runPartialTest(t, data, stages, numItems)
 	wg.Wait()
-	// fmt.Printf("[%s] Waited\n", t.Name())
 
 	numResults := len(result)
-	// fmt.Printf("[%s] results %v\n", t.Name(), numResults)
-	require.GreaterOrEqual(t, numResults, items)
+	require.Equal(t, numResults, numItems)
 	require.Equal(t, []string{"102", "104", "106", "108", "110"}[:numResults], result)
 
-	// every item we processed all stages (0.1s per stage)
-	stagesAllItems := items * len(stages)
-	// for all other items we may have processed at least one stage
-	otherStages := len(data) - items
-
 	require.Less(t,
-		int64(elapsed),
+		elapsed,
 		// for the required items we processed all stages (0.4s per item)
-		// and we may have processed at least one stage for all other items
-		// (0.1 second for every unprocessed item)
-		int64(sleepPerStage)*int64(stagesAllItems+otherStages)+int64(fault))
+		sleepPerStage*time.Duration(numItems*len(stages))+fault)
 }

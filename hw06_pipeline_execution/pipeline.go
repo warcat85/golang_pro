@@ -1,9 +1,5 @@
 package hw06pipelineexecution
 
-import (
-	"strconv"
-)
-
 type (
 	In  = <-chan interface{}
 	Out = In
@@ -19,40 +15,35 @@ func ExecutePipeline(in In, done In, stages ...Stage) Out {
 	}
 
 	current := in
-	for index, stage := range stages {
-		current = stage(canceler(current, done, strconv.Itoa(index)))
+	for _, stage := range stages {
+		current = stage(canceler(current, done))
 	}
 	// to make sure we don't return result if we were terminated
-	current = canceler(current, done, "last")
+	current = canceler(current, done)
 	return current
 }
 
-func canceler(in In, done In, name string) Out {
+func canceler(in In, done In) Out {
 	if done == nil {
 		return in
 	}
 	out := make(Bi)
-	// fmt.Printf("[%s] starting\n", name)
 	go func() {
 		defer close(out)
-		// defer fmt.Printf("[%s] done\n", name)
 
 		for {
 			select {
 			case <-done:
-				drain(in, name)
-				// fmt.Printf("[%s] returning (done/receive)\n", name)
+				drain(in)
 				return
 			case v, ok := <-in:
 				if !ok {
-					// fmt.Printf("[%s] returning -> %v\n", name, v)
 					return
 				}
 
 				select {
 				case <-done:
-					drain(in, name)
-					// fmt.Printf("[%s] returning (done/send)\n", name)
+					drain(in)
 					return
 				case out <- v:
 				}
@@ -62,9 +53,9 @@ func canceler(in In, done In, name string) Out {
 	return out
 }
 
-func drain(in In, name string) {
+// drain all the values from the input channel before terminating.
+func drain(in In) {
 	for v := range in {
 		_ = v
-		// fmt.Printf("[%s] draining -> %v\n", name, v)
 	}
 }
