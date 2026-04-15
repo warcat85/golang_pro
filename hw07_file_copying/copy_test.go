@@ -1,10 +1,11 @@
 package main
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestCopy(t *testing.T) {
@@ -93,11 +94,7 @@ func TestCopy(t *testing.T) {
 				return
 			}
 
-			if err != nil {
-				t.Errorf("unexpected error: %v", err)
-				return
-			}
-
+			require.NoError(t, err)
 			expectedPath := filepath.Join("testdata", tc.expectedFile)
 			compareFiles(t, expectedPath, tempFile)
 		})
@@ -123,9 +120,7 @@ func TestCopyEdgeCases(t *testing.T) {
 		srcPath := filepath.Join("testdata", "input_empty.txt")
 		tempFile := createTempFile(t)
 		err := Copy(srcPath, tempFile, 0, 0)
-		if err != nil {
-			t.Errorf("unexpected error copying empty file: %v", err)
-		}
+		require.NoError(t, err)
 
 		expectedPath := filepath.Join("testdata", "out_empty.txt")
 		compareFiles(t, expectedPath, tempFile)
@@ -146,9 +141,7 @@ func TestCopyEdgeCases(t *testing.T) {
 		defer os.Remove(tempFile)
 
 		err := Copy(srcPath, tempFile, 0, 0)
-		if err != nil {
-			t.Errorf("unexpected error copying symlink: %v", err)
-		}
+		require.NoError(t, err)
 
 		expectedPath := filepath.Join("testdata", "out_offset0_limit0.txt")
 		compareFiles(t, expectedPath, tempFile)
@@ -184,12 +177,11 @@ func createTempFile(t *testing.T) string {
 
 func checkError(t *testing.T, err error, expected error) {
 	t.Helper()
-	if err == nil {
-		t.Error("expected error but got none")
-		return
-	}
-	if expected != nil && !errors.Is(err, expected) {
-		t.Errorf("expected error %v, got %v", expected, err)
+
+	if expected != nil {
+		require.ErrorAs(t, err, &expected)
+	} else {
+		require.Error(t, err)
 	}
 }
 
@@ -204,9 +196,8 @@ func compareFiles(t *testing.T, expectedPath, actualPath string) {
 		t.Fatalf("failed to read actual file: %v", err)
 	}
 
-	if len(expected) != len(actual) {
-		t.Errorf("file sizes differ: expected %d, got %d", len(expected), len(actual))
-	}
+	require.Equal(t, len(expected), len(actual),
+		"file sizes differ: expected %d, got %d", len(expected), len(actual))
 
 	if !bytesEqual(expected, actual) {
 		t.Error("file contents differ")
