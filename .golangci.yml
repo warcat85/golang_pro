@@ -16,6 +16,8 @@ linters-settings:
           - "!$test"
         allow:
           - $gostd
+          - github.com/cheggaaa/pb/v3
+          - golang.org/x/example/hello/reverse
       Test:
         files:
           - $test
